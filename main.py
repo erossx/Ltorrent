@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayo
                                QFileDialog, QInputDialog, QMessageBox, QProgressBar,
                                QLabel, QHeaderView, QMenu, QMenuBar, QStatusBar,
                                QSplitter, QGroupBox, QGridLayout, QLineEdit, QSpinBox,
-                               QCheckBox, QSlider, QTextEdit, QTabWidget)
+                               QCheckBox, QSlider, QTextEdit, QTabWidget, QComboBox)
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QFont
 from torrent_client import TorrentClient
@@ -40,6 +40,12 @@ class TorrentMainWindow(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.check_auto_shutdown)
         self.update_timer.start(5000)  # 5초마다 확인
+        
+        # Tor 상태 확인 타이머
+        self.tor_check_timer = QTimer()
+        self.tor_check_timer.timeout.connect(self.check_tor_status)
+        self.tor_check_timer.start(10000)  # 10초마다 Tor 상태 확인
+        self.check_tor_status()  # 시작 시 한 번 확인
         
     def setup_ui(self):
         """UI 구성"""
@@ -198,21 +204,97 @@ class TorrentMainWindow(QMainWindow):
         
         security_layout.addWidget(security_settings_group, 0, 0)
         
+        # 익명성 설정
+        anonymity_group = QGroupBox("익명성 & 프록시 설정")
+        anonymity_layout = QGridLayout(anonymity_group)
+        
+        # 익명 모드
+        self.anonymous_checkbox = QCheckBox("익명 모드 (DHT/LSD 비활성화, User-Agent 변경)")
+        self.anonymous_checkbox.toggled.connect(self.on_anonymous_toggled)
+        anonymity_layout.addWidget(self.anonymous_checkbox, 0, 0, 1, 3)
+        
+        # 프록시 설정
+        anonymity_layout.addWidget(QLabel("프록시 타입:"), 1, 0)
+        self.proxy_type_combo = QComboBox()
+        self.proxy_type_combo.addItems(["없음", "HTTP", "SOCKS4", "SOCKS5", "HTTP (인증)", "SOCKS5 (인증)"])
+        self.proxy_type_combo.currentTextChanged.connect(self.on_proxy_type_changed)
+        anonymity_layout.addWidget(self.proxy_type_combo, 1, 1, 1, 2)
+        
+        # 프록시 호스트
+        anonymity_layout.addWidget(QLabel("프록시 주소:"), 2, 0)
+        self.proxy_host_input = QLineEdit()
+        self.proxy_host_input.setPlaceholderText("예: 127.0.0.1")
+        self.proxy_host_input.setEnabled(False)
+        anonymity_layout.addWidget(self.proxy_host_input, 2, 1)
+        
+        # 프록시 포트
+        anonymity_layout.addWidget(QLabel("포트:"), 2, 2)
+        self.proxy_port_input = QLineEdit()
+        self.proxy_port_input.setPlaceholderText("예: 1080")
+        self.proxy_port_input.setEnabled(False)
+        anonymity_layout.addWidget(self.proxy_port_input, 2, 3)
+        
+        # 프록시 인증 (처음에는 숨김)
+        self.proxy_username_label = QLabel("사용자명:")
+        self.proxy_username_input = QLineEdit()
+        self.proxy_username_input.setEnabled(False)
+        self.proxy_password_label = QLabel("비밀번호:")
+        self.proxy_password_input = QLineEdit()
+        self.proxy_password_input.setEchoMode(QLineEdit.Password)
+        self.proxy_password_input.setEnabled(False)
+        
+        anonymity_layout.addWidget(self.proxy_username_label, 3, 0)
+        anonymity_layout.addWidget(self.proxy_username_input, 3, 1)
+        anonymity_layout.addWidget(self.proxy_password_label, 3, 2)
+        anonymity_layout.addWidget(self.proxy_password_input, 3, 3)
+        
+        # 프록시 인증 필드 숨기기
+        self.proxy_username_label.hide()
+        self.proxy_username_input.hide()
+        self.proxy_password_label.hide()
+        self.proxy_password_input.hide()
+        
+        # 프록시 설정 버튼
+        self.proxy_apply_button = QPushButton("프록시 적용")
+        self.proxy_apply_button.clicked.connect(self.on_proxy_apply_clicked)
+        self.proxy_apply_button.setEnabled(False)
+        anonymity_layout.addWidget(self.proxy_apply_button, 4, 0)
+        
+        self.proxy_disable_button = QPushButton("프록시 비활성화")
+        self.proxy_disable_button.clicked.connect(self.on_proxy_disable_clicked)
+        self.proxy_disable_button.setEnabled(False)
+        anonymity_layout.addWidget(self.proxy_disable_button, 4, 1)
+        
+        # Tor 자동 연결 버튼
+        self.tor_connect_button = QPushButton("🧅 Tor 자동 연결")
+        self.tor_connect_button.clicked.connect(self.on_tor_connect_clicked)
+        anonymity_layout.addWidget(self.tor_connect_button, 4, 2)
+        
+        # Tor 상태 표시
+        self.tor_status_label = QLabel("Tor: 연결 안됨")
+        anonymity_layout.addWidget(self.tor_status_label, 5, 0, 1, 3)
+        
+        security_layout.addWidget(anonymity_group, 0, 1)
+        
         # 보안 통계
         security_stats_group = QGroupBox("보안 통계")
         security_stats_layout = QGridLayout(security_stats_group)
         
         self.encryption_status_label = QLabel("암호화: 활성화")
         self.dht_status_label = QLabel("DHT: 활성화")
+        self.anonymity_status_label = QLabel("익명 모드: 비활성화")
+        self.proxy_status_label = QLabel("프록시: 비활성화")
         self.blocked_ips_count_label = QLabel("차단된 IP: 0개")
         self.security_events_count_label = QLabel("보안 이벤트: 0개")
         
         security_stats_layout.addWidget(self.encryption_status_label, 0, 0)
         security_stats_layout.addWidget(self.dht_status_label, 0, 1)
-        security_stats_layout.addWidget(self.blocked_ips_count_label, 1, 0)
-        security_stats_layout.addWidget(self.security_events_count_label, 1, 1)
+        security_stats_layout.addWidget(self.anonymity_status_label, 1, 0)
+        security_stats_layout.addWidget(self.proxy_status_label, 1, 1)
+        security_stats_layout.addWidget(self.blocked_ips_count_label, 2, 0)
+        security_stats_layout.addWidget(self.security_events_count_label, 2, 1)
         
-        security_layout.addWidget(security_stats_group, 1, 0)
+        security_layout.addWidget(security_stats_group, 1, 0, 1, 2)
         
         # 보안 로그
         security_log_group = QGroupBox("보안 로그")
@@ -235,7 +317,7 @@ class TorrentMainWindow(QMainWindow):
         log_buttons_layout.addStretch()
         
         security_log_layout.addLayout(log_buttons_layout)
-        security_layout.addWidget(security_log_group, 2, 0)
+        security_layout.addWidget(security_log_group, 2, 0, 1, 2)
         
         # 보안 탭 추가
         info_widget.addTab(security_tab, "보안")
@@ -573,7 +655,7 @@ class TorrentMainWindow(QMainWindow):
             self.security_log_text.append('\n'.join(logs))
             # 가장 최근 로그로 스크롤
             cursor = self.security_log_text.textCursor()
-            cursor.movePosition(cursor.End)
+            cursor.movePosition(cursor.MoveOperation.End)
             self.security_log_text.setTextCursor(cursor)
     
     def clear_security_log(self):
@@ -583,17 +665,216 @@ class TorrentMainWindow(QMainWindow):
         self.status_bar.showMessage("보안 로그를 지웠습니다.")
         self.update_security_stats()
     
+    def on_anonymous_toggled(self, checked):
+        """익명 모드 토글"""
+        self.torrent_client.set_anonymous_mode(checked)
+        self.update_security_stats()
+        
+    def on_proxy_type_changed(self, proxy_type):
+        """프록시 타입 변경"""
+        if proxy_type == "없음":
+            self.proxy_host_input.setEnabled(False)
+            self.proxy_port_input.setEnabled(False)
+            self.proxy_apply_button.setEnabled(False)
+            self.proxy_disable_button.setEnabled(False)
+            # 인증 필드 숨기기
+            self.proxy_username_label.hide()
+            self.proxy_username_input.hide()
+            self.proxy_password_label.hide()
+            self.proxy_password_input.hide()
+        else:
+            self.proxy_host_input.setEnabled(True)
+            self.proxy_port_input.setEnabled(True)
+            self.proxy_apply_button.setEnabled(True)
+            
+            # 인증이 필요한 프록시인지 확인
+            if "인증" in proxy_type:
+                self.proxy_username_label.show()
+                self.proxy_username_input.show()
+                self.proxy_username_input.setEnabled(True)
+                self.proxy_password_label.show()
+                self.proxy_password_input.show()
+                self.proxy_password_input.setEnabled(True)
+            else:
+                self.proxy_username_label.hide()
+                self.proxy_username_input.hide()
+                self.proxy_password_label.hide()
+                self.proxy_password_input.hide()
+    
+    def on_proxy_apply_clicked(self):
+        """프록시 설정 적용"""
+        proxy_type_text = self.proxy_type_combo.currentText()
+        host = self.proxy_host_input.text().strip()
+        port_text = self.proxy_port_input.text().strip()
+        
+        if not host or not port_text:
+            QMessageBox.warning(self, "오류", "프록시 주소와 포트를 입력해주세요.")
+            return
+        
+        try:
+            port = int(port_text)
+        except ValueError:
+            QMessageBox.warning(self, "오류", "올바른 포트 번호를 입력해주세요.")
+            return
+        
+        # 프록시 타입 매핑
+        proxy_type_map = {
+            "HTTP": "http",
+            "SOCKS4": "socks4", 
+            "SOCKS5": "socks5",
+            "HTTP (인증)": "http_pw",
+            "SOCKS5 (인증)": "socks5_pw"
+        }
+        
+        proxy_type = proxy_type_map.get(proxy_type_text)
+        if not proxy_type:
+            return
+        
+        username = self.proxy_username_input.text().strip()
+        password = self.proxy_password_input.text().strip()
+        
+        success = self.torrent_client.set_proxy(proxy_type, host, port, username, password)
+        if success:
+            self.proxy_disable_button.setEnabled(True)
+            QMessageBox.information(self, "성공", "프록시가 설정되었습니다.")
+            self.update_security_stats()
+        else:
+            QMessageBox.warning(self, "오류", "프록시 설정에 실패했습니다.")
+    
+    def on_proxy_disable_clicked(self):
+        """프록시 비활성화"""
+        self.torrent_client.disable_proxy()
+        self.proxy_disable_button.setEnabled(False)
+        self.proxy_type_combo.setCurrentText("없음")
+        self.tor_status_label.setText("Tor: 연결 안됨")
+        self.update_security_stats()
+    
+    def on_tor_connect_clicked(self):
+        """Tor 자동 연결"""
+        import socket
+        
+        # Tor 연결 테스트
+        try:
+            # Tor SOCKS5 프록시 포트 테스트
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)
+            result = sock.connect_ex(('127.0.0.1', 9050))
+            sock.close()
+            
+            if result == 0:
+                # Tor가 실행 중이면 자동 설정
+                success = self.torrent_client.set_proxy("socks5", "127.0.0.1", 9050)
+                if success:
+                    self.tor_status_label.setText("Tor: ✅ 연결됨")
+                    self.proxy_type_combo.setCurrentText("SOCKS5")
+                    self.proxy_host_input.setText("127.0.0.1")
+                    self.proxy_port_input.setText("9050")
+                    self.proxy_disable_button.setEnabled(True)
+                    
+                    # 익명 모드도 자동 활성화
+                    if not self.anonymous_checkbox.isChecked():
+                        self.anonymous_checkbox.setChecked(True)
+                        self.torrent_client.set_anonymous_mode(True)
+                    
+                    QMessageBox.information(self, "성공", 
+                                          "Tor에 성공적으로 연결되었습니다!\n"
+                                          "• SOCKS5 프록시: 127.0.0.1:9050\n"
+                                          "• 익명 모드: 활성화됨\n"
+                                          "• 모든 트래픽이 Tor 네트워크를 통해 라우팅됩니다.")
+                    self.update_security_stats()
+                else:
+                    QMessageBox.warning(self, "오류", "Tor 프록시 설정에 실패했습니다.")
+            else:
+                # Tor가 실행되지 않음
+                reply = QMessageBox.question(self, "Tor 실행 필요", 
+                                           "Tor 서비스가 실행되지 않고 있습니다.\n"
+                                           "Tor를 시작하시겠습니까?",
+                                           QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    self.start_tor_service()
+                    
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"Tor 연결 테스트 중 오류가 발생했습니다: {e}")
+    
+    def start_tor_service(self):
+        """Tor 서비스 시작"""
+        try:
+            import subprocess
+            
+            # Tor 서비스 시작 시도
+            result = subprocess.run(['brew', 'services', 'start', 'tor'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                QMessageBox.information(self, "성공", 
+                                      "Tor 서비스가 시작되었습니다.\n"
+                                      "몇 초 후 다시 '🧅 Tor 자동 연결' 버튼을 클릭하세요.")
+            else:
+                QMessageBox.warning(self, "오류", 
+                                  f"Tor 서비스 시작에 실패했습니다.\n"
+                                  f"수동으로 터미널에서 실행하세요:\n"
+                                  f"brew services start tor")
+        except subprocess.TimeoutExpired:
+            QMessageBox.warning(self, "타임아웃", "Tor 서비스 시작 시간이 초과되었습니다.")
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"Tor 서비스 시작 중 오류: {e}")
+    
+    def check_tor_status(self):
+        """Tor 상태 확인 (백그라운드)"""
+        try:
+            import socket
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('127.0.0.1', 9050))
+            sock.close()
+            
+            # 현재 프록시가 Tor인지 확인
+            anonymity_status = self.torrent_client.get_anonymity_status()
+            is_using_tor = (anonymity_status['proxy_enabled'] and 
+                          anonymity_status['proxy_host'] == '127.0.0.1' and 
+                          anonymity_status['proxy_port'] == 9050)
+            
+            if result == 0:  # Tor 실행 중
+                if is_using_tor:
+                    self.tor_status_label.setText("Tor: ✅ 연결됨")
+                else:
+                    self.tor_status_label.setText("Tor: 🟡 사용 가능")
+            else:  # Tor 실행 안됨
+                if is_using_tor:
+                    self.tor_status_label.setText("Tor: ❌ 연결 끊김")
+                else:
+                    self.tor_status_label.setText("Tor: 연결 안됨")
+                    
+        except Exception:
+            # 조용히 실패 (백그라운드 체크이므로)
+            pass
+
     def update_security_stats(self):
         """보안 통계 업데이트"""
-        stats = self.torrent_client.get_security_stats()
-        self.encryption_status_label.setText(f"암호화: {'활성화' if stats['encryption_enabled'] else '비활성화'}")
-        self.dht_status_label.setText(f"DHT: {'활성화' if stats['dht_enabled'] else '비활성화'}")
-        self.blocked_ips_count_label.setText(f"차단된 IP: {stats['blocked_ips_count']}개")
-        self.security_events_count_label.setText(f"보안 이벤트: {stats['security_events_count']}개")
+        try:
+            stats = self.torrent_client.get_security_stats()
+            self.encryption_status_label.setText(f"암호화: {'활성화' if stats['encryption_enabled'] else '비활성화'}")
+            self.dht_status_label.setText(f"DHT: {'활성화' if stats['dht_enabled'] else '비활성화'}")
+            self.blocked_ips_count_label.setText(f"차단된 IP: {stats['blocked_ips_count']}개")
+            self.security_events_count_label.setText(f"보안 이벤트: {stats['security_events_count']}개")
+            
+            # 익명성 상태 업데이트
+            anonymity_status = self.torrent_client.get_anonymity_status()
+            self.anonymity_status_label.setText(f"익명 모드: {'활성화' if anonymity_status['anonymous_mode'] else '비활성화'}")
+            
+            if anonymity_status['proxy_enabled']:
+                self.proxy_status_label.setText(f"프록시: {anonymity_status['proxy_host']}:{anonymity_status['proxy_port']}")
+            else:
+                self.proxy_status_label.setText("프록시: 비활성화")
+                
+        except Exception as e:
+            print(f"보안 통계 업데이트 오류: {e}")
     
     def closeEvent(self, event):
         """앱 종료 시 토렌트 클라이언트 정리"""
         self.update_timer.stop()
+        self.tor_check_timer.stop()
         self.torrent_client.stop()
         event.accept()
 
@@ -717,6 +998,29 @@ def main():
             border: 1px solid #555555;
             border-radius: 3px;
             padding: 4px;
+        }
+        QComboBox {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 1px solid #555555;
+            border-radius: 3px;
+            padding: 4px;
+            min-width: 100px;
+        }
+        QComboBox::drop-down {
+            background-color: #4a90e2;
+            border: none;
+            width: 20px;
+        }
+        QComboBox::down-arrow {
+            width: 12px;
+            height: 12px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 1px solid #555555;
+            selection-background-color: #4a90e2;
         }
     """)
     

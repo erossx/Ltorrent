@@ -27,6 +27,15 @@ class TorrentClient(QObject):
         self.pex_enabled = True
         self.security_log = []
         
+        # 익명성 설정
+        self.anonymous_mode = False
+        self.proxy_enabled = False
+        self.proxy_type = None
+        self.proxy_host = ""
+        self.proxy_port = 0
+        self.proxy_username = ""
+        self.proxy_password = ""
+        
         # 랜덤 포트 사용 (보안 강화)
         random_port = random.randint(49152, 65535)
         self.session.listen_on(random_port, random_port + 10)
@@ -36,8 +45,19 @@ class TorrentClient(QObject):
         self.completed_torrents = set()  # 완료된 토렌트 추적
         
         # 보안 강화된 세션 설정
+        self._apply_session_settings()
+        
+        # IP 필터 로드
+        self.load_ip_filter()
+        
+        # 상태 업데이트 스레드 시작
+        self.update_thread = Thread(target=self._update_loop, daemon=True)
+        self.update_thread.start()
+    
+    def _apply_session_settings(self):
+        """세션 설정 적용"""
         settings = {
-            'user_agent': 'Simple Torrent Client',
+            'user_agent': 'libtorrent/1.2.0' if self.anonymous_mode else 'Simple Torrent Client',
             'alert_mask': lt.alert.category_t.all_categories,
             'upload_rate_limit': 0,  # 0 = 무제한
             'download_rate_limit': 0,  # 0 = 무제한
@@ -54,23 +74,38 @@ class TorrentClient(QObject):
             'allowed_enc_level': lt.enc_level.both,
             
             # DHT 및 PEX 설정
-            'enable_dht': self.dht_enabled,
-            'enable_lsd': True,
+            'enable_dht': self.dht_enabled and not self.anonymous_mode,
+            'enable_lsd': not self.anonymous_mode,
             'enable_upnp': False,  # 보안상 비활성화
             'enable_natpmp': False,  # 보안상 비활성화
             
-            # 기타 보안 설정
-            'anonymous_mode': False,
-            'force_proxy': False
+            # 익명성 설정
+            'anonymous_mode': self.anonymous_mode,
+            'force_proxy': self.proxy_enabled,
+            
+            # 프록시 설정
+            'proxy_type': self.proxy_type if self.proxy_enabled else lt.proxy_type_t.none,
+            'proxy_hostname': self.proxy_host if self.proxy_enabled else '',
+            'proxy_port': self.proxy_port if self.proxy_enabled else 0,
+            'proxy_username': self.proxy_username if self.proxy_enabled else '',
+            'proxy_password': self.proxy_password if self.proxy_enabled else '',
         }
+        
+        # 익명 모드일 때 추가 설정
+        if self.anonymous_mode:
+            settings.update({
+                'send_redundant_have': False,
+                'lazy_bitfields': True,
+                'use_dht_as_fallback': False,
+                'dont_count_slow_torrents': True,
+                'auto_scrape_interval': 1800,
+                'auto_scrape_min_interval': 900
+            })
+        
         self.session.apply_settings(settings)
         
-        # IP 필터 로드
-        self.load_ip_filter()
-        
-        # 상태 업데이트 스레드 시작
-        self.update_thread = Thread(target=self._update_loop, daemon=True)
-        self.update_thread.start()
+        if self.proxy_enabled and self.proxy_type:
+            self.log_security_event("프록시", f"프록시 설정됨: {self.proxy_host}:{self.proxy_port}")
     
     def add_torrent(self, torrent_path, download_path=None):
         """토렌트 파일 추가"""
@@ -345,24 +380,16 @@ class TorrentClient(QObject):
     def set_encryption_enabled(self, enabled):
         """암호화 설정 변경"""
         self.encryption_enabled = enabled
-        settings = self.session.get_settings()
+        self._apply_session_settings()
         if enabled:
-            settings['out_enc_policy'] = lt.enc_policy.enabled
-            settings['in_enc_policy'] = lt.enc_policy.enabled
             self.log_security_event("ENCRYPTION", "피어 간 암호화 활성화")
         else:
-            settings['out_enc_policy'] = lt.enc_policy.disabled
-            settings['in_enc_policy'] = lt.enc_policy.disabled
             self.log_security_event("ENCRYPTION", "피어 간 암호화 비활성화")
-        
-        self.session.apply_settings(settings)
     
     def set_dht_enabled(self, enabled):
         """DHT 설정 변경"""
         self.dht_enabled = enabled
-        settings = self.session.get_settings()
-        settings['enable_dht'] = enabled
-        self.session.apply_settings(settings)
+        self._apply_session_settings()
         
         if enabled:
             self.log_security_event("DHT", "DHT 활성화")
@@ -397,4 +424,62 @@ class TorrentClient(QObject):
         """클라이언트 종료"""
         self.log_security_event("SHUTDOWN", "토렌트 클라이언트 종료")
         self.running = False
-        self.session.pause() 
+        self.session.pause()
+    
+    def set_anonymous_mode(self, enabled):
+        """익명 모드 설정"""
+        self.anonymous_mode = enabled
+        self._apply_session_settings()
+        if enabled:
+            self.log_security_event("익명성", "익명 모드 활성화됨")
+        else:
+            self.log_security_event("익명성", "익명 모드 비활성화됨")
+    
+    def set_proxy(self, proxy_type, host, port, username="", password=""):
+        """프록시 설정"""
+        try:
+            # 프록시 타입 매핑
+            proxy_types = {
+                'http': lt.proxy_type_t.http,
+                'socks4': lt.proxy_type_t.socks4,
+                'socks5': lt.proxy_type_t.socks5,
+                'http_pw': lt.proxy_type_t.http_pw,
+                'socks5_pw': lt.proxy_type_t.socks5_pw
+            }
+            
+            if proxy_type in proxy_types:
+                self.proxy_enabled = True
+                self.proxy_type = proxy_types[proxy_type]
+                self.proxy_host = host
+                self.proxy_port = port
+                self.proxy_username = username
+                self.proxy_password = password
+                
+                self._apply_session_settings()
+                self.log_security_event("프록시", f"{proxy_type.upper()} 프록시 설정: {host}:{port}")
+                return True
+            else:
+                self.log_security_event("프록시", f"지원하지 않는 프록시 타입: {proxy_type}")
+                return False
+                
+        except Exception as e:
+            self.log_security_event("프록시", f"프록시 설정 오류: {e}")
+            return False
+    
+    def disable_proxy(self):
+        """프록시 비활성화"""
+        self.proxy_enabled = False
+        self.proxy_type = None
+        self._apply_session_settings()
+        self.log_security_event("프록시", "프록시 비활성화됨")
+    
+    def get_anonymity_status(self):
+        """익명성 상태 반환"""
+        return {
+            'anonymous_mode': self.anonymous_mode,
+            'proxy_enabled': self.proxy_enabled,
+            'proxy_host': self.proxy_host if self.proxy_enabled else None,
+            'proxy_port': self.proxy_port if self.proxy_enabled else None,
+            'dht_disabled': not self.dht_enabled,
+            'encryption_enabled': self.encryption_enabled
+        } 
