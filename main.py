@@ -15,8 +15,8 @@ from torrent_client import TorrentClient
 class TorrentMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Simple Torrent Client")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setWindowTitle("Ltorrent - 토렌트 클라이언트")
+        self.setGeometry(100, 100, 1200, 900)  # 창 크기를 더 크게 설정
         
         # 토렌트 클라이언트 초기화
         self.torrent_client = TorrentClient()
@@ -111,6 +111,8 @@ class TorrentMainWindow(QMainWindow):
         
         self.torrent_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.torrent_table.setAlternatingRowColors(True)
+        self.torrent_table.setMinimumHeight(500)  # 최소 높이 설정으로 더 많은 행 표시
+        self.torrent_table.verticalHeader().setDefaultSectionSize(25)  # 행 높이를 25px로 설정
         
         splitter.addWidget(self.torrent_table)
         
@@ -323,7 +325,7 @@ class TorrentMainWindow(QMainWindow):
         info_widget.addTab(security_tab, "보안")
         
         splitter.addWidget(info_widget)
-        splitter.setStretchFactor(0, 3)  # 테이블이 더 큰 공간 차지
+        splitter.setStretchFactor(0, 6)  # 테이블이 훨씬 더 큰 공간 차지 (6:1 비율)
         splitter.setStretchFactor(1, 1)
         
         main_layout.addWidget(splitter)
